@@ -1,0 +1,27 @@
+{
+  "name": "dsh-self",
+  "owner": {
+    "name": "hsclionel",
+    "url": "https://github.com/hsclionel/dsh-self-cc"
+  },
+  "metadata": {
+    "description": "Bridge Claude Code to the DeepSeek Harness already installed on this machine: one-shot tasks, reviews, novel work, and background delegation.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "dsh",
+      "description": "Use the local DeepSeek Harness (dsh) from Claude Code: ask, review, novel, delegate, status.",
+      "version": "0.1.0",
+      "author": {
+        "name": "hsclionel"
+      },
+      "homepage": "https://github.com/hsclionel/dsh-self-cc",
+      "repository": "https://github.com/hsclionel/dsh-self-cc",
+      "license": "MIT",
+      "category": "development",
+      "keywords": ["deepseek", "dsh", "delegation", "code-review", "novel", "bridge"],
+      "source": "./plugins/dsh"
+    }
+  ]
+}

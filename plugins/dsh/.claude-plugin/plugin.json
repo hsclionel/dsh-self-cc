@@ -1,0 +1,12 @@
+{
+  "name": "dsh",
+  "version": "0.1.0",
+  "description": "Use the local DeepSeek Harness (dsh) from Claude Code: one-shot tasks, reviews, novel work, and background delegation.",
+  "author": {
+    "name": "hsclionel"
+  },
+  "homepage": "https://github.com/hsclionel/dsh-self-cc",
+  "repository": "https://github.com/hsclionel/dsh-self-cc",
+  "license": "MIT",
+  "keywords": ["deepseek", "dsh", "delegation", "code-review", "novel", "bridge"]
+}
