@@ -9,6 +9,9 @@
 //
 // The bridge talks to `dsh --profile <p> --json -- "task"` over stdin and
 // parses the newline-delimited event stream, so no extra dependencies.
+//
+// On Windows the bridge does not need a native `dsh`: it forwards the run into
+// WSL (where dsh lives) through wsl.exe. Set DSH_WSL_DISTRO to pin the distro.
 
 import { spawn, execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
@@ -21,6 +24,10 @@ const STATE_DIR = join(DSH_HOME, "cc-self");
 const SESSIONS_FILE = join(STATE_DIR, "sessions.json");
 const DEFAULT_PROFILE = "cc";
 const NOVEL_STACK = ["dsh-novel-forge", "dsh-humanizer-zh"];
+
+// Windows host, or an explicit request to exercise the WSL path from inside a
+// Linux box (used by the project's own tests).
+const WSL_MODE = process.platform === "win32" || process.env.DSH_WSL === "1";
 
 function die(msg, code = 1) {
   process.stderr.write(`dsh-bridge: ${msg}\n`);
@@ -45,6 +52,76 @@ function parseArgs(argv) {
   return out;
 }
 
+// ---------------------------------------------------------------- WSL plumbing
+
+function wslExe() {
+  return process.env.DSH_WSL_EXE ||
+    (process.platform === "win32" ? "wsl.exe" : "/mnt/c/Windows/System32/wsl.exe");
+}
+
+function wslDistro() {
+  if (process.env.DSH_WSL_DISTRO) return process.env.DSH_WSL_DISTRO;
+  try {
+    // wsl.exe -l -q prints UTF-16LE, even when called from Linux.
+    const buf = execFileSync(wslExe(), ["-l", "-q"], {
+      encoding: "buffer", stdio: ["ignore", "pipe", "ignore"],
+    });
+    const text = buf.toString("utf16le").replace(/\0/g, "");
+    return text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+function wslPrefix() {
+  const d = wslDistro();
+  return d ? ["-d", d] : [];
+}
+
+function shellQuote(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+function posixCwd(p) {
+  if (!p || !WSL_MODE) return p;
+  if (/^\//.test(p)) return p;                 // already a Linux path
+  if (process.platform !== "win32") return p;  // tests run inside WSL
+  try {
+    return execFileSync(wslExe(), [...wslPrefix(), "wslpath", "-a", p], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return p.replace(/\\/g, "/");
+  }
+}
+
+// WSLENV forwards the key into the distro without putting it on the command
+// line (where `ps` would show it).
+function wslKeyEnv(value) {
+  const prev = process.env.WSLENV ? `${process.env.WSLENV}:` : "";
+  return { DEEPSEEK_API_KEY: value, WSLENV: `${prev}DEEPSEEK_API_KEY/u` };
+}
+
+function readKeyInWsl() {
+  const script = [
+    "for f in /proc/[0-9]*/environ; do",
+    '  k=$(tr "\\000" "\\n" < "$f" 2>/dev/null | grep -m1 "^DEEPSEEK_API_KEY=" || true)',
+    '  if [ -n "$k" ]; then printf "%s" "${k#DEEPSEEK_API_KEY=}"; exit 0; fi',
+    "done",
+    "exit 1",
+  ].join("\n");
+  try {
+    const v = execFileSync(wslExe(), [...wslPrefix(), "-e", "bash", "-lc", script], {
+      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return v ? { value: v, source: "wsl dsh web process" } : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------- dsh lookup
+
 function resolveDsh() {
   const fromEnv = process.env.DSH_BINARY;
   if (fromEnv && existsSync(fromEnv)) return fromEnv;
@@ -60,10 +137,6 @@ function resolveDsh() {
 
 function readKeyFromProc() {
   const want = "DEEPSEEK_API_KEY";
-  let pid = null;
-  for (const dir of [process.env.DSH_WEB_PID]) {
-    if (dir) pid = dir;
-  }
   try {
     for (const entry of readdirSync("/proc")) {
       if (!/^\d+$/.test(entry)) continue;
@@ -91,7 +164,7 @@ function discoverKey() {
     return { value: process.env.DEEPSEEK_API_KEY, source: "environment" };
   }
   if (process.env.DSH_CC_NO_KEY_DISCOVERY) return null;
-  return readKeyFromProc();
+  return WSL_MODE ? readKeyInWsl() : readKeyFromProc();
 }
 
 function nowIso() {
@@ -115,7 +188,7 @@ async function readStdin() {
   return Buffer.concat(chunks).toString("utf8").trim();
 }
 
-function buildArgs({ profile, mode, session, addDirs, task }) {
+function buildArgs({ profile, mode, session, addDirs }) {
   const args = ["--profile", profile];
   if (session) args.push("--session-id", session);
   args.push("--json", "--permission-mode", mode, "--approval-policy", "never");
@@ -155,21 +228,34 @@ async function cmdRun(args) {
     );
   }
 
-  const dsh = resolveDsh();
   const argv = buildArgs({
     profile,
     mode,
     session: typeof flags.session === "string" ? flags.session : null,
     addDirs: [],
-    task,
   });
   const timeoutMs = flags.timeout ? Number(flags.timeout) * 1000 : 900_000;
 
-  const child = spawn(dsh, argv, {
-    cwd: flags.cwd || process.cwd(),
-    env: { ...process.env, DEEPSEEK_API_KEY: key.value },
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  let cmd, cmdArgs, env, cwd;
+  if (WSL_MODE) {
+    const dir = posixCwd(flags.cwd || process.cwd());
+    const inner = [
+      `cd ${shellQuote(dir)} || exit 9`,
+      'export PATH="$HOME/.local/node/bin:$HOME/.local/bin:/usr/local/bin:$PATH"',
+      `exec dsh ${argv.map(shellQuote).join(" ")}`,
+    ].join(" && ");
+    cmd = wslExe();
+    cmdArgs = [...wslPrefix(), "-e", "bash", "-lc", inner];
+    env = { ...process.env, ...wslKeyEnv(key.value) };
+    cwd = undefined;
+  } else {
+    cmd = resolveDsh();
+    cmdArgs = argv;
+    env = { ...process.env, DEEPSEEK_API_KEY: key.value };
+    cwd = flags.cwd || process.cwd();
+  }
+
+  const child = spawn(cmd, cmdArgs, { cwd, env, stdio: ["pipe", "pipe", "pipe"] });
 
   let out = "";
   let err = "";
@@ -205,15 +291,48 @@ async function cmdRun(args) {
   if (!verbose && parsed.text) process.stdout.write(parsed.text.replace(/\n?$/, "\n"));
 }
 
-function runSync(bin, args, env) {
-  return execFileSync(bin, args, { env: { ...process.env, ...env }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+function runSync(bin, args) {
+  return execFileSync(bin, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
+function runScriptInWsl(script) {
+  return execFileSync(wslExe(), [...wslPrefix(), "-e", "bash", "-lc", script], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env },
+  });
+}
+
+const WSL_PATH = 'export PATH="$HOME/.local/node/bin:$HOME/.local/bin:/usr/local/bin:$PATH";';
+
 function cmdStatus() {
+  const key = discoverKey();
+  if (WSL_MODE) {
+    let bin = "missing", version = "unknown", pkg = "";
+    try {
+      const out = runScriptInWsl(
+        `${WSL_PATH} echo "BIN=$(command -v dsh || echo missing)"; ` +
+        `echo "VER=$(dsh --version 2>/dev/null || echo unknown)"; ` +
+        `cat "$HOME/.dsh/profiles/${DEFAULT_PROFILE}/package.json" 2>/dev/null || true`
+      );
+      const [first, second, ...rest] = out.split(/\r?\n/);
+      bin = (first || "").replace(/^BIN=/, "");
+      version = (second || "").replace(/^VER=/, "");
+      pkg = rest.join("\n").trim();
+    } catch (e) {
+      version = `error: ${e.message}`;
+    }
+    let bundles = [];
+    try { bundles = JSON.parse(pkg)?.dsh?.profile?.bundles || []; } catch {}
+    console.log(`target     : WSL (${wslDistro() || "default distro"})`);
+    console.log(`dsh binary : ${bin}`);
+    console.log(`dsh version: ${version}`);
+    console.log(`profile    : ~/.dsh/profiles/${DEFAULT_PROFILE} in WSL${pkg ? "" : " (missing — run setup)"}`);
+    console.log(`bundles    : ${bundles.length ? bundles.join(", ") : "(none)"}`);
+    console.log(`auth       : ${key ? key.source : "MISSING"}`);
+    return;
+  }
   const dsh = resolveDsh();
   let version = "unknown";
   try { version = execFileSync(dsh, ["--version"], { encoding: "utf8" }).trim(); } catch {}
-  const key = discoverKey();
   const profileDir = join(DSH_HOME, "profiles", DEFAULT_PROFILE);
   let bundles = [];
   try {
@@ -228,17 +347,34 @@ function cmdStatus() {
 }
 
 function cmdSetup() {
+  const specs = [...NOVEL_STACK];
+  if (typeof args.flags["prose-gate"] === "string") specs.push(`link:${args.flags["prose-gate"]}`);
+  const specsSafe = specs.filter((s) => !s.startsWith("link:") || existsSync(s.slice(5)));
+
+  if (WSL_MODE) {
+    const add = specsSafe.map(shellQuote).join(" ");
+    process.stderr.write(`creating/refreshing ${DEFAULT_PROFILE} profile in WSL...\n`);
+    try {
+      runScriptInWsl(
+        `${WSL_PATH} if [ ! -f "$HOME/.dsh/profiles/${DEFAULT_PROFILE}/package.json" ]; then ` +
+        `dsh --profile ${DEFAULT_PROFILE} --from-default-profile headless --dump-config >/dev/null; fi; ` +
+        `dsh plugin --profile ${DEFAULT_PROFILE} add ${add}`
+      );
+    } catch (e) {
+      die(`setup failed in WSL: ${e.stderr || e.message}`);
+    }
+    cmdStatus();
+    return;
+  }
+
   const dsh = resolveDsh();
   const profileDir = join(DSH_HOME, "profiles", DEFAULT_PROFILE);
   if (!existsSync(profileDir)) {
     process.stderr.write(`creating ${DEFAULT_PROFILE} profile from the headless template...\n`);
     runSync(dsh, ["--profile", DEFAULT_PROFILE, "--from-default-profile", "headless", "--dump-config"]);
   }
-  const specs = [...NOVEL_STACK];
-  if (typeof args.flags["prose-gate"] === "string") specs.push(`link:${args.flags["prose-gate"]}`);
-  const specsSafe = specs.filter((s) => !s.startsWith("link:") || existsSync(s.slice(5)));
   process.stderr.write(`installing into ${DEFAULT_PROFILE}: ${specsSafe.join(" ")}\n`);
-  runSync(dsh, ["plugin", "--profile", DEFAULT_PROFILE, "add", ...specsSafe], {});
+  runSync(dsh, ["plugin", "--profile", DEFAULT_PROFILE, "add", ...specsSafe]);
   cmdStatus();
   const key = discoverKey();
   if (!key) {

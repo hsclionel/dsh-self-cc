@@ -44,6 +44,21 @@ Auth resolution order:
 
 Set `DSH_CC_NO_KEY_DISCOVERY=1` to disable step 2. Set `DSH_BINARY` to point at a specific `dsh` binary.
 
+## Windows (Claude Code on the host, dsh inside WSL)
+
+Claude Code can run natively on Windows while `dsh` stays in WSL. The bridge detects `process.platform === "win32"` and forwards every run through `wsl.exe`:
+
+```
+wsl.exe -d <distro> -e bash -lc 'cd <cwd> && exec dsh ...'
+```
+
+- The task still travels on stdin; events come back on stdout unchanged.
+- `--cwd` is translated with `wslpath`, so `C:\work\proj` becomes `/mnt/c/work/proj`.
+- `DEEPSEEK_API_KEY` is forwarded through `WSLENV=.../u` instead of the command line, and key discovery scans `/proc` inside the distro.
+- No native `dsh.exe` is needed on Windows, and nothing is installed outside `~/.dsh`.
+
+Pin the distro with `DSH_WSL_DISTRO=Debian` if `wsl.exe -l -q` returns several. Override the launcher with `DSH_WSL_EXE` (for example `C:\Windows\System32\wsl.exe`). To force the WSL path from Linux (used by the tests) set `DSH_WSL=1`.
+
 ## Requirements
 
 - Node >= 20 (the bridge uses ESM and top-level await)
@@ -55,7 +70,9 @@ Set `DSH_CC_NO_KEY_DISCOVERY=1` to disable step 2. Set `DSH_BINARY` to point at 
 - One task per process; there is no broker and no resume across processes beyond `--session-id`.
 - No mid-run approvals: the permission mode is fixed when the run starts.
 - The `cc` profile only carries the headless app and the novel stack; web-only plugins (openwrite, whale widget, huashu skills) stay in the `web` profile.
-- POSIX only (the key-discovery path reads `/proc`).
+- Key discovery reads `/proc`, so it needs Linux or WSL; on a native Windows `dsh` (no WSL) export `DEEPSEEK_API_KEY` explicitly.
+- The WSL path assumes a `bash` login shell and `dsh` on `PATH` (the bridge also prepends `~/.local/node/bin`).
+- On a Windows host, Claude Code itself needs Git Bash and a `node` on PATH, because the commands invoke the bridge as a `node` script.
 
 ## License
 
