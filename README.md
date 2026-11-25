@@ -7,7 +7,7 @@ Unlike [`cpj-dev/dsh-plugin-cc`](https://github.com/cpj-dev/dsh-plugin-cc), whic
 ## Install
 
 ```bash
-/plugin marketplace add /absolute/path/to/dsh-self-cc   # or: <owner>/dsh-self-cc once pushed
+/plugin marketplace add hsclionel/dsh-self-cc
 /plugin install dsh@dsh-self
 /dsh:setup
 ```
