@@ -5,7 +5,7 @@ allowed-tools: ["Bash"]
 ---
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dsh-bridge.mjs" run "$ARGUMENTS"
+MSYS_NO_PATHCONV=1 node "${CLAUDE_PLUGIN_ROOT}/scripts/dsh-bridge.mjs" run "$ARGUMENTS"
 ```
 
 Rules:

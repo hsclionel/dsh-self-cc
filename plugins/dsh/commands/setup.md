@@ -6,7 +6,7 @@ allowed-tools: ["Bash"]
 Run the setup, then report the result:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dsh-bridge.mjs" setup
+MSYS_NO_PATHCONV=1 node "${CLAUDE_PLUGIN_ROOT}/scripts/dsh-bridge.mjs" setup
 ```
 
 Rules:

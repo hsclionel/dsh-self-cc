@@ -53,9 +53,11 @@ wsl.exe -d <distro> -e bash -lc 'cd <cwd> && exec dsh ...'
 ```
 
 - The task still travels on stdin; events come back on stdout unchanged.
-- `--cwd` is translated with `wslpath`, so `C:\work\proj` becomes `/mnt/c/work/proj`.
+- `--cwd` is normalised before WSL sees it: `C:\work\proj` → `/mnt/c/work/proj`, `\\wsl.localhost\Debian\home\me` → `/home/me`, and Git Bash's `/mnt/c/Program Files/Git/mnt/c/game` rewrite is unwound. `wslpath` is only consulted when the form is still ambiguous, and a failed conversion no longer falls back to a path WSL cannot open.
 - `DEEPSEEK_API_KEY` is forwarded through `WSLENV=.../u` instead of the command line, and key discovery scans `/proc` inside the distro.
 - No native `dsh.exe` is needed on Windows, and nothing is installed outside `~/.dsh`.
+
+The command wrappers set `MSYS_NO_PATHCONV=1` so Git Bash stops rewriting arguments before the bridge sees them. If you call the bridge yourself from Git Bash, do the same or pass Windows paths.
 
 Pin the distro with `DSH_WSL_DISTRO=Debian` if `wsl.exe -l -q` returns several. Override the launcher with `DSH_WSL_EXE` (for example `C:\Windows\System32\wsl.exe`). To force the WSL path from Linux (used by the tests) set `DSH_WSL=1`.
 
@@ -73,6 +75,13 @@ Pin the distro with `DSH_WSL_DISTRO=Debian` if `wsl.exe -l -q` returns several. 
 - Key discovery reads `/proc`, so it needs Linux or WSL; on a native Windows `dsh` (no WSL) export `DEEPSEEK_API_KEY` explicitly.
 - The WSL path assumes a `bash` login shell and `dsh` on `PATH` (the bridge also prepends `~/.local/node/bin`).
 - On a Windows host, Claude Code itself needs Git Bash and a `node` on PATH, because the commands invoke the bridge as a `node` script.
+
+## Tests
+
+```bash
+node tests/paths.mjs          # Windows → WSL path conversion
+DSH_WSL=1 node plugins/dsh/scripts/dsh-bridge.mjs status   # WSL hop (Linux host)
+```
 
 ## License
 

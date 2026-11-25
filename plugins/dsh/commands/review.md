@@ -9,7 +9,7 @@ allowed-tools: ["Bash"]
   echo "Focus: ${ARGUMENTS:-correctness, regressions, missing tests}";
   echo; echo "## git status"; git status --short;
   echo; echo "## git diff HEAD"; git diff HEAD; } \
-| node "${CLAUDE_PLUGIN_ROOT}/scripts/dsh-bridge.mjs" run -
+| MSYS_NO_PATHCONV=1 node "${CLAUDE_PLUGIN_ROOT}/scripts/dsh-bridge.mjs" run -
 ```
 
 Rules:

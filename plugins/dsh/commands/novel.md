@@ -5,7 +5,7 @@ allowed-tools: ["Bash"]
 ---
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dsh-bridge.mjs" run --profile cc --write "You are working on a Chinese web novel. Use the novel workflow tools (novel_* from dsh-novel-forge) and the humanizer-zh rules for prose. A host-side prose gate blocks any chapter whose AI-flavor score is >= 60/100: rewrite the offending sentences instead of paraphrasing, then resubmit. Task: $ARGUMENTS"
+MSYS_NO_PATHCONV=1 node "${CLAUDE_PLUGIN_ROOT}/scripts/dsh-bridge.mjs" run --profile cc --write "You are working on a Chinese web novel. Use the novel workflow tools (novel_* from dsh-novel-forge) and the humanizer-zh rules for prose. A host-side prose gate blocks any chapter whose AI-flavor score is >= 60/100: rewrite the offending sentences instead of paraphrasing, then resubmit. Task: $ARGUMENTS"
 ```
 
 Rules:

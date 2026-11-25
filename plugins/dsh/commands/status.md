@@ -4,7 +4,7 @@ allowed-tools: ["Bash"]
 ---
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/dsh-bridge.mjs" status
+MSYS_NO_PATHCONV=1 node "${CLAUDE_PLUGIN_ROOT}/scripts/dsh-bridge.mjs" status
 ```
 
 Report the output as a short table: binary, version, profile path, bundles, auth source.

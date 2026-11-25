@@ -17,6 +17,7 @@ import { spawn, execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { unmangleMsysPath, windowsToWslPath } from "./wsl-paths.mjs";
 
 const HOME = homedir();
 const DSH_HOME = process.env.DSH_HOME || join(HOME, ".dsh");
@@ -84,15 +85,18 @@ function shellQuote(s) {
 
 function posixCwd(p) {
   if (!p || !WSL_MODE) return p;
-  if (/^\//.test(p)) return p;                 // already a Linux path
-  if (process.platform !== "win32") return p;  // tests run inside WSL
-  try {
-    return execFileSync(wslExe(), [...wslPrefix(), "wslpath", "-a", p], {
-      encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return p.replace(/\\/g, "/");
+  const cleaned = unmangleMsysPath(p);
+  if (cleaned.startsWith("/")) return cleaned;   // already a Linux path
+  if (process.platform === "win32") {
+    try {
+      const converted = execFileSync(wslExe(), [...wslPrefix(), "wslpath", "-a", cleaned], {
+        encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (converted.startsWith("/")) return converted;
+    } catch {}
   }
+  // Git Bash and wslpath both mangle some forms; do the conversion ourselves.
+  return windowsToWslPath(cleaned, wslDistro());
 }
 
 // WSLENV forwards the key into the distro without putting it on the command
@@ -240,7 +244,7 @@ async function cmdRun(args) {
   if (WSL_MODE) {
     const dir = posixCwd(flags.cwd || process.cwd());
     const inner = [
-      `cd ${shellQuote(dir)} || exit 9`,
+      `cd ${shellQuote(dir)} 2>/dev/null || { echo "dsh-bridge: cannot enter ${dir} inside WSL" >&2; exit 9; }`,
       'export PATH="$HOME/.local/node/bin:$HOME/.local/bin:/usr/local/bin:$PATH"',
       `exec dsh ${argv.map(shellQuote).join(" ")}`,
     ].join(" && ");
